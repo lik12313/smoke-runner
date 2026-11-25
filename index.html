@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Smoke Runner</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+:root{color-scheme:light;--ink:#22202e;--accent:#3ec1d3;--panel:rgba(255,255,255,.94)}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#fff;overflow:hidden;font-family:"Trebuchet MS",Verdana,sans-serif;color:var(--ink);touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;padding:calc(env(safe-area-inset-top,0px) + 12px) 18px 0;font-size:20px;font-weight:700;pointer-events:none}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(255,255,255,.35)}
+.card{background:var(--panel);border:3px solid var(--ink);border-radius:18px;padding:22px 24px;text-align:center;max-width:400px;box-shadow:6px 6px 0 var(--ink)}
+h1{margin:0 0 6px;font-family:Impact,"Arial Black",sans-serif;font-size:44px;letter-spacing:1px;font-weight:400}
+p{margin:8px 0;line-height:1.4;font-size:15px}
+button{font:700 18px "Trebuchet MS",Verdana,sans-serif;border:3px solid var(--ink);border-radius:12px;background:var(--accent);color:var(--ink);cursor:pointer}
+#go{margin-top:12px;padding:11px 32px}
+button:focus-visible{outline:3px solid #ff7a1a;outline-offset:3px}
+#picks{display:flex;gap:8px;margin:12px 0 4px}
+.pick{flex:1;padding:8px 4px;font-size:14px;background:#fff}
+.pick.sel{background:var(--accent)}
+.pick:disabled{opacity:.5;cursor:not-allowed;background:#eee}
+#toast{position:fixed;top:22%;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 20px;border-radius:12px;font-weight:700;pointer-events:none;opacity:0;transition:opacity .3s;text-align:center}
+.card{max-height:92vh;overflow:auto;touch-action:pan-y}
+#name{width:100%;margin-top:12px;padding:10px 12px;font:700 17px "Trebuchet MS",Verdana,sans-serif;border:3px solid var(--ink);border-radius:12px;text-align:center;color:var(--ink);background:#fff;user-select:text;-webkit-user-select:text}
+#name.err{border-color:#e0533d;background:#fff1ee}
+#board{margin-top:12px;text-align:left;border-top:2px solid var(--ink);padding-top:8px}
+#board h2{margin:0 0 4px;font-size:16px;text-align:center}
+#rows{margin:0;padding:0;list-style:none;font-size:14px}
+#rows li{display:flex;justify-content:space-between;padding:2px 4px;border-bottom:1px dashed #ccc}
+#rows li:first-child{font-weight:700;background:#fff7d6}
+#note{font-size:12px;margin:6px 0 0;text-align:center;color:#666}
+.pick{display:inline-flex;align-items:center;justify-content:center}
+#pad{position:fixed;left:0;right:0;bottom:0;display:none;justify-content:space-between;padding:0 14px calc(env(safe-area-inset-bottom,0px) + 14px);pointer-events:none}
+#pad div{display:flex;gap:10px;pointer-events:auto}
+#pad button{width:62px;height:62px;padding:0;font-size:26px;border-radius:50%;background:rgba(255,255,255,.85);touch-action:none}
+@media (pointer:coarse){#pad.on{display:flex}}
+@media (max-width:420px){h1{font-size:36px}.card{padding:16px 14px}.pick{font-size:12px;padding:8px 2px}p{font-size:14px}#hud{font-size:16px}}
+#msg:empty{display:none}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="hud"><span id="score">0 m</span><span id="coins">Novčići 0</span></div>
+<div id="toast"></div>
+<div id="pad"><div><button data-a="L" aria-label="Lijevo">◀</button><button data-a="R" aria-label="Desno">▶</button></div><div><button data-a="U" aria-label="Skok">▲</button><button data-a="D" aria-label="Klizanje">▼</button></div></div>
+<div id="overlay">
+  <div class="card">
+    <h1 id="title">Smoke Runner</h1>
+    <p id="msg"></p>
+    <input id="name" type="text" maxlength="14" placeholder="Upiši svoje ime" autocomplete="off" aria-label="Upiši svoje ime">
+    <div id="picks"></div>
+    <div id="board"><h2>Ljestvica</h2><ol id="rows"></ol><p id="note"></p></div>
+    <button id="go">Pokreni trčanje</button>
+  </div>
+</div>
+<script>
+const LANE=2.2,FARZ=-85;
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));
+document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0xffffff);
+scene.fog=new THREE.Fog(0xffffff,28,88);
+const cam=new THREE.PerspectiveCamera(60,1,0.1,200);
+function resize(){
+  const w=innerWidth,h=innerHeight,narrow=w/h<0.8;renderer.setSize(w,h);
+  cam.aspect=w/h;cam.fov=narrow?80:60;cam.updateProjectionMatrix();
+  window.camY=narrow?5.2:4.4;cam.position.set(0,window.camY,narrow?9:7.5);cam.lookAt(0,1.1,-8);
+}
+addEventListener('resize',resize);resize();
+cam.position.set(0,4.4,7.5);cam.lookAt(0,1.1,-8);
+scene.add(new THREE.HemisphereLight(0xffffff,0xb8b8cc,0.85));
+const sun=new THREE.DirectionalLight(0xffffff,0.6);sun.position.set(4,10,6);scene.add(sun);
+
+const M=(c,e,o)=>new THREE.MeshLambertMaterial(Object.assign({color:c,emissive:e||0},o||{}));
+const box=(w,h,d,c)=>new THREE.Mesh(new THREE.BoxGeometry(w,h,d),M(c));
+// road
+const road=new THREE.Mesh(new THREE.PlaneGeometry(7.2,200),M(0xe9e9f2));
+road.rotation.x=-Math.PI/2;road.position.z=-80;scene.add(road);
+for(const x of[-3.7,3.7]){const e=box(0.3,0.25,200,0xc8c8d8);e.position.set(x,0.1,-80);scene.add(e)}
+const dashes=[],pillars=[];
+for(let i=0;i<24;i++)for(const x of[-1.1,1.1]){const d=box(0.1,0.02,1.6,0xbdbdd0);d.position.set(x,0.02,0);d.userData.i=i;scene.add(d);dashes.push(d)}
+for(let i=0;i<12;i++)for(const x of[-6,6]){const p=box(0.8,3+(i%3),0.8,0xe3e3ee);p.userData.i=i;p.userData.x=x;scene.add(p);pillars.push(p)}
+const wrap=(v,n)=>((v%n)+n)%n;
+
+// characters
+const CH=[{id:'vape',name:'Vape',need:0,tip:1.75,sz:1.6,smoke:0xc4bce8},
+          {id:'cig',name:'Cigareta',need:100,tip:1.6,sz:0.9,smoke:0x9a9aa6},
+          {id:'weed',name:'Vutra',need:500,tip:1.65,sz:1.3,smoke:0x6fcf6a}];
+function cyl(g,rt,rb,h,y,c,e,o){const m=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,20),M(c,e,o));m.position.y=y;g.add(m);return m}
+function eyes(g,y,r){
+  for(const s of[-1,1]){
+    const w=new THREE.Mesh(new THREE.SphereGeometry(0.1,12,10),M(0xffffff));w.position.set(s*0.12,y,r*0.85);g.add(w);
+    const p=new THREE.Mesh(new THREE.SphereGeometry(0.05,10,8),M(0x111111));p.position.set(s*0.12,y,r*0.85+0.08);g.add(p);
+  }
+}
+function tex(w,h,fn){const c=document.createElement('canvas');c.width=w;c.height=h;fn(c.getContext('2d'),w,h);const t=new THREE.CanvasTexture(c);t.anisotropy=4;return t}
+const LM=(t,e)=>new THREE.MeshLambertMaterial({map:t,emissive:e||0});
+function cylM(g,rt,rb,h,y,mat){const m=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,28),mat);m.position.y=y;g.add(m);return m}
+function cr(x,a,b,w,h,r){x.beginPath();x.moveTo(a+r,b);x.arcTo(a+w,b,a+w,b+h,r);x.arcTo(a+w,b+h,a,b+h,r);x.arcTo(a,b+h,a,b,r);x.arcTo(a,b,a+w,b,r);x.closePath()}
+function rrShape(w,h,r){const s=new THREE.Shape();s.moveTo(r,0);s.lineTo(w-r,0);s.quadraticCurveTo(w,0,w,r);s.lineTo(w,h-r);s.quadraticCurveTo(w,h,w-r,h);s.lineTo(r,h);s.quadraticCurveTo(0,h,0,h-r);s.lineTo(0,r);s.quadraticCurveTo(0,0,r,0);return s}
+function rrBox(w,h,d,r,c,e){const g=new THREE.ExtrudeGeometry(rrShape(w,h,r),{depth:d,bevelEnabled:true,bevelSize:.025,bevelThickness:.025,bevelSegments:3,curveSegments:8});g.translate(-w/2,0,-d/2);return new THREE.Mesh(g,M(c,e))}
+function makeChar(id){
+  const g=new THREE.Group();
+  if(id==='vape'){
+    // slim black disposable bar: dark body, vertical HIGS logo, blue stripe, grey ring, wide black mouthpiece
+    const body=rrBox(.5,1.15,.34,.06,0x1b130f);body.position.y=.05;g.add(body);
+    const lab=tex(200,470,(x,w,h)=>{
+      x.fillStyle='#1b130f';x.fillRect(0,0,w,h);
+      x.fillStyle='#2a1d17';x.fillRect(0,0,34,h);
+      x.save();x.translate(78,320);x.rotate(-Math.PI/2);x.fillStyle='#fff';x.textAlign='center';x.font='bold 92px Impact, Arial Black, Arial';x.fillText('HIGS',0,30);x.restore();
+      x.save();x.translate(128,330);x.rotate(Math.PI/2);x.fillStyle='#e8e8e8';x.textAlign='center';x.font='bold 17px Arial';x.fillText('GRAPE ICE',0,6);x.restore();
+      x.fillStyle='#2fa8ff';x.fillRect(158,215,7,225);
+    });
+    const lp=new THREE.Mesh(new THREE.PlaneGeometry(.46,1.08),new THREE.MeshBasicMaterial({map:lab}));lp.position.set(0,.66,.2);g.add(lp);
+    const ring=rrBox(.55,.06,.37,.03,0x4a4a52);ring.position.y=1.21;g.add(ring);
+    const mp=rrBox(.58,.33,.32,.09,0x0d0d10);mp.position.y=1.27;g.add(mp);
+  }else if(id==='cig'){
+    // cigarette: speckled cork filter, gold band, white paper, glowing ember and ash
+    const fil=tex(128,128,(x,w,h)=>{x.fillStyle='#e0a050';x.fillRect(0,0,w,h);for(let i=0;i<260;i++){x.fillStyle=Math.random()<.5?'#a8692a':'#f3c98a';x.fillRect(Math.random()*w,Math.random()*h,3,3)}});
+    const pap=tex(128,256,(x,w,h)=>{x.fillStyle='#fdfdfb';x.fillRect(0,0,w,h);x.fillStyle='rgba(0,0,0,.05)';for(let i=0;i<40;i++)x.fillRect(Math.random()*w,0,1,h);x.fillStyle='rgba(0,0,0,.12)';x.fillRect(0,h-26,w,2)});
+    cylM(g,.25,.25,.5,.25,LM(fil));
+    cylM(g,.255,.255,.05,.525,M(0xc79a3a));
+    cylM(g,.25,.25,.82,.96,LM(pap));
+    cylM(g,.25,.23,.05,1.395,M(0xff5a1f,0xff4000));
+    cylM(g,.23,.19,.14,1.49,M(0x8d8d92));cylM(g,.17,.12,.06,1.59,M(0x5b5b60));
+    
+  }else{
+    // joint: cardboard crutch, rolled cone paper with flecks, burning end
+    const card=tex(64,64,(x,w,h)=>{x.fillStyle='#c9a46a';x.fillRect(0,0,w,h);for(let i=0;i<10;i++){x.fillStyle='#a8844a';x.fillRect(0,i*7,w,2)}});
+    const pap=tex(128,256,(x,w,h)=>{x.fillStyle='#bfe08a';x.fillRect(0,0,w,h);x.strokeStyle='rgba(30,110,40,.35)';x.lineWidth=2;for(let i=0;i<14;i++){x.beginPath();x.moveTo(Math.random()*w,0);x.lineTo(Math.random()*w,h);x.stroke()}for(let i=0;i<50;i++){x.fillStyle=Math.random()<.5?'#2f8f2f':'#1f6f25';x.fillRect(Math.random()*w,Math.random()*h,4,3)}});
+    cylM(g,.12,.12,.32,.16,LM(card));
+    cylM(g,.31,.13,1.0,.8,LM(pap));
+    cylM(g,.31,.3,.05,1.325,M(0xff7a1a,0xff5a00));
+    cylM(g,.3,.25,.16,1.43,M(0x8d8d92));cylM(g,.22,.1,.1,1.54,M(0x5b5b60));
+    
+  }
+  return g;
+}
+
+// state
+let state='menu',dist=0,coins=0,speed=14,px=0,lane=0,jy=0,jv=0,slide=0,objs=[],nextSpawn=18,burst=0,emit=0,shake=0,charId='vape',player=null,total=0;
+try{total=+localStorage.getItem('pd-total')||0;charId=localStorage.getItem('pd-char')||'vape'}catch(e){}
+const cfg=()=>CH.find(c=>c.id===charId)||CH[0];
+if(total<cfg().need)charId='vape';
+const shadow=new THREE.Mesh(new THREE.CircleGeometry(.5,20),new THREE.MeshBasicMaterial({color:0,transparent:true,opacity:.15}));
+shadow.rotation.x=-Math.PI/2;shadow.position.y=.03;scene.add(shadow);
+function setChar(id){
+  charId=id;try{localStorage.setItem('pd-char',id)}catch(e){}
+  if(player)scene.remove(player);
+  player=makeChar(id);scene.add(player);buildPicks();
+}
+const LEAF='<svg viewBox="-50 -50 100 100" width="20" height="20" aria-hidden="true" style="margin-left:4px"><g transform="translate(0,12)" fill="#2e9e3f" stroke="#14572a" stroke-width="4" stroke-linejoin="round">'+[[0,1],[-35,.85],[35,.85],[-70,.6],[70,.6]].map(([a,s])=>'<path d="M0 0C-9 -12 -9 -30 0 -46C9 -30 9 -12 0 0Z" transform="rotate('+a+') scale('+s+')"/>').join('')+'<path d="M0 0V28" fill="none"/></g></svg>';
+function buildPicks(){
+  const el=document.getElementById('picks');el.innerHTML='';
+  for(const c of CH){
+    const b=document.createElement('button');b.className='pick'+(c.id===charId?' sel':'');
+    const locked=total<c.need;
+    b.disabled=locked;b.textContent=locked?c.name+' '+Math.min(total,c.need)+'/'+c.need:c.name;
+    if(c.id==='weed')b.insertAdjacentHTML('beforeend',LEAF);
+    b.onclick=()=>setChar(c.id);el.appendChild(b);
+  }
+}
+
+// shared geometry for obstacles / coins
+const coinGeo=new THREE.CylinderGeometry(.35,.35,.1,18);coinGeo.rotateX(Math.PI/2);
+const coinMat=M(0xffc933,0x7a5200);
+// cannabis plant in a pot with two grow lights above (the tall obstacle)
+const leafShape=new THREE.Shape();leafShape.moveTo(0,0);leafShape.bezierCurveTo(-.09,.1,-.1,.3,0,.46);leafShape.bezierCurveTo(.1,.3,.09,.1,0,0);
+const leafGeo=new THREE.ShapeGeometry(leafShape,8);
+const leafMats=[new THREE.MeshLambertMaterial({color:0x3fae3a,side:THREE.DoubleSide}),new THREE.MeshLambertMaterial({color:0x2a8a30,side:THREE.DoubleSide})];
+function fanLeaf(s){
+  const g=new THREE.Group();
+  [[0,1],[-32,.85],[32,.85],[-64,.62],[64,.62],[-88,.4],[88,.4]].forEach(([a,k],i)=>{
+    const m=new THREE.Mesh(leafGeo,leafMats[i%2]);m.rotation.z=a*Math.PI/180;m.scale.setScalar(k*s);g.add(m);
+  });
+  return g;
+}
+function makePlant(){
+  const g=new THREE.Group();
+  const add=(geo,mat,x,y,z)=>{const m=new THREE.Mesh(geo,mat);m.position.set(x,y,z);g.add(m);return m};
+  add(new THREE.CylinderGeometry(.75,.55,.9,24),M(0xb5653a),0,.45,0);
+  add(new THREE.CylinderGeometry(.8,.8,.12,24),M(0x9c5430),0,.94,0);
+  add(new THREE.CylinderGeometry(.7,.7,.03,24),M(0x3b2a1e),0,.99,0);
+  add(new THREE.CylinderGeometry(.05,.07,1.5,8),M(0x4b7a2e),0,1.7,0);
+  [[1.25,0,1.3],[1.55,2.1,1.2],[1.85,4.2,1.05],[2.15,1,.9]].forEach(([y,r,s])=>{
+    for(let k=0;k<3;k++){const o=new THREE.Group();o.position.y=y;o.rotation.y=r+k*Math.PI*2/3;const f=fanLeaf(s);f.rotation.x=-Math.PI/2+.5;o.add(f);g.add(o)}
+  });
+  const top=fanLeaf(.9);top.position.y=2.35;g.add(top);
+  for(const x of[-.5,.5]){
+    add(new THREE.BoxGeometry(.85,.12,.85),M(0x2a2a33),x,2.9,0);
+    add(new THREE.PlaneGeometry(.75,.75).rotateX(Math.PI/2),new THREE.MeshBasicMaterial({color:0xff5ae0}),x,2.83,0);
+    add(new THREE.ConeGeometry(.75,1.0,24,1,true),new THREE.MeshBasicMaterial({color:0xff7ae8,transparent:true,opacity:.16,side:THREE.DoubleSide,depthWrite:false}),x,2.3,0);
+    add(new THREE.CylinderGeometry(.02,.02,.3,6),M(0x666670),x,3.1,0);
+  }
+  add(new THREE.BoxGeometry(1.4,.06,.06),M(0x444450),0,3.26,0);
+  return g;
+}
+function spawn(){
+  const free=Math.floor(Math.random()*3)-1,types=['block','low','high'];
+  for(let l=-1;l<=1;l++){
+    if(l===free){
+      if(Math.random()<.8){const hi=Math.random()<.3;for(let k=0;k<5;k++){
+        const m=new THREE.Mesh(coinGeo,coinMat);m.position.set(l*LANE,hi?1.7:.8,FARZ-k*2.2);scene.add(m);
+        objs.push({m,t:'coin',l,y:hi?1.7:.8,half:.6});}}
+      continue;
+    }
+    if(Math.random()<.75){
+      const t=types[Math.floor(Math.random()*3)];let m,half;
+      if(t==='block'){m=makePlant();half=1.0}
+      else if(t==='low'){m=box(1.9,.6,.6,0xff8a1f);half=.3;const s=box(1.92,.15,.62,0xffffff);s.position.y=.1;m.add(s);m.position.y=.3}
+      else{m=new THREE.Group();half=.15;
+        for(const s of[-.9,.9]){const p=box(.15,2.2,.2,0x444455);p.position.set(s,1.1,0);m.add(p)}
+        const b=box(1.9,.5,.3,0xffd400);b.position.y=1.25;m.add(b);}
+      m.position.set(l*LANE,t==='block'?0:(t==='low'?.3:0),FARZ);scene.add(m);
+      objs.push({m,t,l,half});
+    }
+  }
+  nextSpawn=dist+Math.max(13,24-speed*.35);
+}
+
+// smoke
+const smokeGeo=new THREE.SphereGeometry(.2,10,8);const puffs=[];
+function puff(){
+  const c=cfg(),m=new THREE.Mesh(smokeGeo,new THREE.MeshBasicMaterial({color:c.smoke,transparent:true,opacity:.65,depthWrite:false}));
+  m.position.set(player.position.x+(Math.random()-.5)*.2,c.tip*player.scale.y+jy,(Math.random()-.5)*.2);
+  const k=c.sz*(.7+Math.random()*.6);m.scale.setScalar(k);scene.add(m);
+  puffs.push({m,vy:1.2+Math.random(),vx:(Math.random()-.5)*.8,life:0,max:1.6+Math.random()*.8,k});
+}
+
+let toastT;
+function toast(t){const e=document.getElementById('toast');e.textContent=t;e.style.opacity=1;clearTimeout(toastT);toastT=setTimeout(()=>e.style.opacity=0,2800)}
+function saveTotal(){try{localStorage.setItem('pd-total',total)}catch(e){}}
+
+function collect(){
+  coins++;total++;saveTotal();
+  if(coins%20===0){burst=1.4}
+  if(total===100)toast('Cigareta otključana! Odaberi je u izborniku.');
+  if(total===500)toast('Vutra otključana! Odaberi je u izborniku.');
+}
+
+function die(){
+  state='over';shake=.6;document.getElementById('pad').classList.remove('on');
+  document.getElementById('title').textContent='Sudar!';
+  document.getElementById('msg').textContent='Pretrčao si '+Math.floor(dist/2)+' m i skupio '+coins+' novčića. Ukupno novčića: '+total+'.';
+  document.getElementById('go').textContent='Trči ponovno';
+  buildPicks();submitScore();
+  setTimeout(()=>document.getElementById('overlay').classList.remove('hidden'),500);
+}
+
+function update(dt){
+  speed=Math.min(14+dist*.004,32);dist+=speed*dt;
+  if(dist>nextSpawn)spawn();
+  px+=(lane*LANE-px)*Math.min(1,dt*14);
+  if(jy>0||jv>0){jv-=32*dt;jy+=jv*dt;if(jy<=0){jy=0;jv=0}}
+  if(slide>0)slide-=dt;
+  const H=slide>0?.7:1.4;
+  for(const o of objs){
+    o.m.position.z+=speed*dt;const z=o.m.position.z;
+    if(Math.abs(px-o.l*LANE)>1)continue;
+    if(Math.abs(z)<o.half+.35){
+      if(o.t==='coin'){if(jy<o.y+.4&&jy+H>o.y-.4){o.dead=1;collect()}}
+      else if(o.t==='block'){if(jy<3)die()}
+      else if(o.t==='low'){if(jy<.6)die()}
+      else if(jy<1.5&&jy+H>1.0)die();
+    }
+  }
+  for(const o of objs)if(o.dead||o.m.position.z>9)scene.remove(o.m);
+  objs=objs.filter(o=>!o.dead&&o.m.position.z<=9);
+  if(burst>0){burst-=dt;emit+=dt*28;while(emit>=1){puff();emit--}}
+  document.getElementById('score').textContent=Math.floor(dist/2)+' m';
+  document.getElementById('coins').textContent='Novčići '+coins+' (ukupno '+total+')';
+}
+
+const clock=new THREE.Clock();
+function frame(){
+  requestAnimationFrame(frame);
+  const dt=Math.min(clock.getDelta(),.05),t=clock.elapsedTime;
+  if(state==='play')update(dt);else if(state==='menu')dist+=8*dt;
+  shake*=.9;
+  dashes.forEach(d=>d.position.z=8-wrap(d.userData.i*4-dist,96));
+  pillars.forEach(p=>{p.position.set(p.userData.x,p.geometry.parameters.height/2,8-wrap(p.userData.i*8-dist,96))});
+  for(const o of objs)if(o.t==='coin')o.m.rotation.y=t*4;
+  // player pose
+  const sl=slide>0&&state==='play';
+  player.position.set(px,jy,0);
+  player.scale.y=sl?.5:1;
+  player.rotation.z=(lane*LANE-px)*-.12;
+  player.position.y=jy+(state==='menu'?Math.abs(Math.sin(t*3))*.1:(jy===0&&state==='play'?Math.abs(Math.sin(dist*1.2))*.12:0));
+  shadow.position.x=px;shadow.scale.setScalar(1-Math.min(jy,1.5)*.2);
+  // smoke
+  for(const s of puffs){
+    s.life+=dt;s.m.position.y+=s.vy*dt;s.m.position.x+=s.vx*dt;s.m.position.z+=(state==='play'?speed:0)*dt;
+    s.m.scale.setScalar(s.k*(1+s.life*1.1));s.m.material.opacity=.65*Math.max(0,1-s.life/s.max);
+  }
+  for(let i=puffs.length-1;i>=0;i--)if(puffs[i].life>puffs[i].max){scene.remove(puffs[i].m);puffs[i].m.material.dispose();puffs.splice(i,1)}
+  cam.position.x=(Math.random()-.5)*shake;cam.position.y=(window.camY||4.4)+(Math.random()-.5)*shake;
+  renderer.render(scene,cam);
+}
+
+function act(a){
+  if(state!=='play')return;
+  if(a==='L')lane=Math.max(-1,lane-1);
+  else if(a==='R')lane=Math.min(1,lane+1);
+  else if(a==='U'&&jy===0){jv=9.5;jy=.001;slide=0}
+  else if(a==='D'){slide=.6;if(jy>0)jv=-14}
+}
+addEventListener('keydown',e=>{
+  const m={ArrowLeft:'L',a:'L',A:'L',ArrowRight:'R',d:'R',D:'R',ArrowUp:'U',w:'U',W:'U',ArrowDown:'D',s:'D',S:'D'}[e.key];
+  if(m){e.preventDefault();act(m)}
+});
+let sx,sy;
+addEventListener('touchstart',e=>{sx=e.touches[0].clientX;sy=e.touches[0].clientY},{passive:true});
+addEventListener('touchend',e=>{
+  if(sx==null)return;
+  const dx=e.changedTouches[0].clientX-sx,dy=e.changedTouches[0].clientY-sy;
+  if(Math.max(Math.abs(dx),Math.abs(dy))<24)return;
+  if(Math.abs(dx)>Math.abs(dy))act(dx<0?'L':'R');else act(dy<0?'U':'D');
+  sx=null;
+});
+function start(){
+  const nm=getName();
+  if(!nm){nameEl.classList.add('err');nameEl.focus();return}
+  try{localStorage.setItem('pd-name',nm)}catch(e){}
+  for(const o of objs)scene.remove(o.m);
+  objs=[];dist=0;coins=0;speed=14;px=0;lane=0;jy=0;jv=0;slide=0;nextSpawn=18;burst=0;shake=0;
+  state='play';document.getElementById('overlay').classList.add('hidden');document.getElementById('pad').classList.add('on');
+}
+document.getElementById('go').onclick=start;
+// leaderboard: shared via db when available, otherwise this device only
+let db=null,uid=null,localBoard=[];
+try{localBoard=JSON.parse(localStorage.getItem('pd-board2')||'[]')}catch(e){}
+const nameEl=document.getElementById('name');
+try{nameEl.value=localStorage.getItem('pd-name')||''}catch(e){}
+nameEl.addEventListener('input',()=>nameEl.classList.remove('err'));
+nameEl.addEventListener('keydown',e=>{e.stopPropagation();if(e.key==='Enter')start()});
+const getName=()=>nameEl.value.replace(/[<>&"'`\\]/g,'').trim().slice(0,14);
+const LOCALNOTE='Online ljestvica nije dostupna. Prikazani su rezultati s ovog uređaja.';
+function drawBoard(rows,note){
+  const ol=document.getElementById('rows');ol.innerHTML='';
+  rows.slice(0,10).forEach((r,i)=>{
+    const li=document.createElement('li'),a=document.createElement('span'),b=document.createElement('span');
+    a.textContent=(i+1)+'. '+String(r.name||'Igrač').slice(0,14);b.textContent=r.score;li.append(a,b);ol.appendChild(li);
+  });
+  if(!rows.length){const li=document.createElement('li');li.textContent='Još nema rezultata. Budi prvi!';ol.appendChild(li)}
+  document.getElementById('note').textContent=note||'';
+}
+drawBoard(localBoard,'');
+(async()=>{
+  try{const u=await claude.use('user');uid=u?await u.id():null;db=await claude.use('db')}catch(e){db=null}
+  if(db&&uid){
+    try{db.collection('scores').orderBy('score','desc').limit(10).onSnapshot(s=>drawBoard(s.docs.map(d=>d.data()),'Zajednička ljestvica'),()=>{db=null;drawBoard(localBoard,LOCALNOTE)})}catch(e){db=null;drawBoard(localBoard,LOCALNOTE)}
+  }else drawBoard(localBoard,LOCALNOTE);
+})();
+async function submitScore(){
+  const name=getName(),sc=Math.floor(dist/2)+coins*10;
+  if(!name||sc<=0)return;
+  const row={name,score:sc,char:charId,at:Date.now()};
+  const i=localBoard.findIndex(r=>r.name===name);
+  if(i<0)localBoard.push(row);else if(localBoard[i].score<sc)localBoard[i]=row;
+  localBoard.sort((a,b)=>b.score-a.score);localBoard=localBoard.slice(0,10);
+  try{localStorage.setItem('pd-board2',JSON.stringify(localBoard))}catch(e){}
+  if(db&&uid){
+    try{
+      const ref=db.doc('scores/'+uid),s=await ref.get();
+      if(!s.exists||(s.data().score||0)<sc)await ref.set(row);
+      else if(s.data().name!==name)await ref.update({name});
+    }catch(e){document.getElementById('note').textContent='Zajednička ljestvica nije dostupna. Rezultat je spremljen na ovom uređaju.'}
+  }else drawBoard(localBoard,LOCALNOTE);
+}
+document.querySelectorAll('#pad button').forEach(b=>b.addEventListener('pointerdown',e=>{e.preventDefault();act(b.dataset.a)}));
+setChar(charId);
+frame();
+</script>
+</body>
+</html>
